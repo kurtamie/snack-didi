@@ -43,6 +43,38 @@ index.html
     ├── #cart-drawer      — slide-in cart (mobile) / sidebar (desktop) (Req 3, 4)
     ├── #checkout-modal   — checkout form overlay (Req 4)
     └── <script type="module"> — bootstrap entry point
+
+src/
+├── data/
+│   └── products.js       — static PRODUCTS array
+├── modules/
+│   ├── EventBus.js
+│   ├── CartManager.js
+│   ├── CartRenderer.js
+│   ├── SoundEngine.js
+│   ├── AnimationEngine.js
+│   ├── CatalogUI.js
+│   ├── CheckoutForm.js
+│   └── ConsignmentForm.js
+└── main.js               — bootstrap entry point
+
+tests/
+├── utils.property.test.js
+├── cartmanager.property.test.js
+├── soundengine.property.test.js
+├── soundengine.unit.test.js
+├── animationengine.unit.test.js
+├── checkoutform.property.test.js
+├── validation.property.test.js
+├── consignmentform.property.test.js
+└── dom.unit.test.js
+
+assets/audio/
+├── btn-click.mp3
+├── spice-select.mp3
+├── cart-add.mp3
+├── order-confirm.mp3
+└── consignment-submit.mp3
 ```
 
 ### Module Dependency Graph
@@ -86,6 +118,14 @@ All cross-module communication uses `document.dispatchEvent` / `document.addEven
 | `cart:changed` | `{ items, total }` | CartManager | Cart UI, CheckoutForm |
 | `anim:cart-badge-pulse` | `{}` | CartManager | AnimationEngine |
 
+**`snd:btn-click` delegation pattern:** `main.js` attaches a single delegated `click` listener on `document` that dispatches `snd:btn-click` for any `<button>` click. To prevent double-firing when a module already dispatches a more specific `snd:*` event for the same interaction, any button that handles its own audio event MUST carry the `data-snd-handled` attribute. The delegated handler skips buttons where `event.target.closest('button[data-snd-handled]')` matches.
+
+Buttons that must carry `data-snd-handled`:
+- Spice level selector buttons (dispatch `snd:spice-select`)
+- Add-to-cart buttons (trigger `snd:cart-add` via CartManager)
+- Checkout form submit button (dispatches `snd:order-confirm`)
+- Consignment form submit button (dispatches `snd:consignment-submit`)
+
 ---
 
 ## Components and Interfaces
@@ -97,6 +137,7 @@ Manages all cart state. Persists to `localStorage`. Exposes a pure functional AP
 ```js
 // Public interface
 CartManager {
+  // Instance methods
   addItem(productId: string, spiceLevel: string, unitPrice: number): void
   increaseQuantity(productId: string, spiceLevel: string): void
   decreaseQuantity(productId: string, spiceLevel: string): void
@@ -104,6 +145,11 @@ CartManager {
   clearCart(): void
   getState(): CartState          // returns deep clone; never exposes internal ref
   getOrderSummary(): OrderSummary
+  saveToStorage(storage: Storage): void
+
+  // Static factory methods (required by property tests)
+  static fromItems(items: CartItem[]): CartManager   // constructs a CartManager pre-populated with items; used by property tests
+  static loadFromStorage(storage: Storage): CartManager  // deserializes from localStorage (or a mock); resets to empty on version mismatch or parse error
 }
 ```
 
@@ -128,7 +174,13 @@ sequenceDiagram
     CartManager->>EventBus: dispatch('snd:cart-add', { productId, spiceLevel })
 ```
 
-**Cart rendering** is handled by a separate `CartRenderer` (DOM-only, no business logic) that listens to `cart:changed` and rebuilds the cart UI.
+**Cart rendering** is handled by a separate `CartRenderer` module (DOM-only, no business logic). `CartRenderer` is responsible for:
+- Listening to `cart:changed` events and fully rebuilding the cart UI inside `#cart-drawer`
+- Displaying each `CartItem` with quantity controls ("+", "−", "×") and formatted prices
+- Rendering the empty-cart state message when `items.length === 0`
+- Owning the cart drawer toggle behavior: sliding in/out on mobile (`translate-x-full` ↔ `translate-x-0`) and always-visible on tablet/desktop
+
+`CartRenderer` never mutates cart state directly — all mutations go through `CartManager`.
 
 ### 2. SoundEngine
 
@@ -147,12 +199,23 @@ type ClipName = 'btn-click' | 'spice-select' | 'cart-add' | 'order-confirm' | 'c
 ```
 
 **Clip restart behavior:** Each clip is stored as an `AudioBuffer`. On `play(clipName)`:
-1. If a `BufferSourceNode` for that clip is currently playing, `.stop()` it immediately.
-2. Create a fresh `BufferSourceNode`, connect it to `destination`, `.start(0)`.
+1. If `AudioContext.state === 'suspended'`, call `context.resume()` and await the Promise before proceeding. If `resume()` rejects (e.g., private-browsing mode), swallow the error silently — sound is a progressive enhancement.
+2. If a `BufferSourceNode` for that clip is currently playing, `.stop()` it immediately.
+3. Create a fresh `BufferSourceNode`, connect it to the `GainNode`, `.start(0)`.
 
-**Lazy loading:** Audio files are fetched with `fetch()` + `AudioContext.decodeAudioData()` on first play of each clip (not on page load), satisfying Requirement 7.1.
+**Lazy loading:** Audio files are fetched with `fetch()` + `AudioContext.decodeAudioData()` on first play of each clip (not on page load), satisfying Requirement 7.1. The five clip files must exist at the following paths before `SoundEngine` can be exercised:
 
-**Mute implementation:** A single `GainNode` (value `0` when muted, `1` when unmuted) sits between all `BufferSourceNode`s and the `destination`. This avoids stopping mid-play; it just silences output instantly.
+| Clip name | File path |
+|---|---|
+| `btn-click` | `assets/audio/btn-click.mp3` |
+| `spice-select` | `assets/audio/spice-select.mp3` |
+| `cart-add` | `assets/audio/cart-add.mp3` |
+| `order-confirm` | `assets/audio/order-confirm.mp3` |
+| `consignment-submit` | `assets/audio/consignment-submit.mp3` |
+
+During development these should be silent placeholder MP3s to prevent `fetch()` 404s; replace with real audio before shipping.
+
+**Mute implementation:** A single `GainNode` is the **sole mechanism** for mute control. It sits between all `BufferSourceNode`s and `destination` with gain `1` (unmuted) or `0` (muted). Muting never stops mid-play clips — it silences output instantly without interrupting the node graph. `play()` never branches on mute state; it always builds and starts the `BufferSourceNode` and lets the `GainNode` decide whether audio is audible.
 
 ```mermaid
 graph LR
@@ -201,6 +264,8 @@ Validation runs on `submit` event. Error messages are injected as `<p role="aler
 3. Calls `CartManager.clearCart()`.
 4. Closes the form overlay.
 
+**`data-snd-handled`:** The checkout form's submit button carries `data-snd-handled` so the delegated `snd:btn-click` handler in `main.js` does not fire a generic click sound. The specific `snd:order-confirm` event is dispatched on successful submission instead.
+
 ### 5. ConsignmentForm
 
 Mirrors CheckoutForm's validation architecture. Fields: owner name, store name, phone, city.
@@ -212,6 +277,8 @@ Mirrors CheckoutForm's validation architecture. Fields: owner name, store name, 
 - City: required, max 100 characters
 
 On successful submit: shows inline confirmation, dispatches `snd:consignment-submit`. The form is NOT cleared post-submit to allow the store owner to reference what they entered.
+
+**`data-snd-handled`:** The consignment form's submit button carries `data-snd-handled` for the same reason as the checkout form — the specific `snd:consignment-submit` event is dispatched on success, and the delegated `snd:btn-click` handler in `main.js` must not double-fire.
 
 ### 6. Catalog UI (Product Cards)
 
@@ -226,9 +293,9 @@ const PRODUCTS = [
 ```
 
 Each card includes:
-- Spice level selector (three `<button>` elements with `aria-pressed` toggling)
+- Spice level selector (three `<button>` elements with `aria-pressed` toggling) — **`data-snd-handled` is set on each spice button** so the delegated `snd:btn-click` handler in `main.js` does not double-fire a generic click sound when `snd:spice-select` is already dispatched
 - Quantity input (optional pre-add config; removed for simplicity — quantity managed in cart)
-- "Tambah ke Keranjang" add-to-cart button
+- "Tambah ke Keranjang" add-to-cart button — **`data-snd-handled` is set** because the add action dispatches `snd:cart-add` via `CartManager`; the delegated handler skips buttons carrying this attribute
 
 **Image fallback:** Each `<img>` has an `onerror` handler that replaces the element with a styled placeholder `<div>` carrying `role="img"` and `aria-label="{productName}"`.
 
@@ -471,35 +538,37 @@ The testing stack for a no-build Vanilla JS project is:
 
 ### Unit Tests
 
-Unit tests cover specific examples, edge cases, and integration points:
+Unit tests cover specific examples, edge cases, and integration points. Test files:
 
-- `formatIDR(15000)` → `"Rp 15.000"`
-- Spice level selector: clicking one deselects others
-- Cart empty state renders correct message
-- Hamburger menu toggles nav visibility
-- Image `onerror` handler inserts placeholder with correct `aria-label`
-- Mute toggle persists state to `localStorage`
-- SoundEngine defers AudioContext creation until first user gesture
-- Clip restart: calling `play()` on an in-progress clip stops it and starts fresh
+- `tests/dom.unit.test.js` — cross-module DOM behaviors:
+  - `formatIDR(15000)` → `"Rp 15.000"`
+  - Spice level selector: clicking one deselects others
+  - Cart empty state renders correct message
+  - Hamburger menu toggles nav visibility
+  - Image `onerror` handler inserts placeholder with correct `aria-label`
+  - Mute toggle persists state to `localStorage`
+- `tests/soundengine.unit.test.js` — SoundEngine behaviors:
+  - `AudioContext` is not created before first user interaction
+  - `play()` while muted does not start any `BufferSourceNode`
+  - Clip restart: calling `play()` on an in-progress clip stops it and starts fresh
+  - Mute state round-trips through `localStorage`
+- `tests/animationengine.unit.test.js` — AnimationEngine behaviors:
+  - `[data-animate]` elements receive `animate-in` class on IntersectionObserver callback
+  - `anim:cart-badge-pulse` adds pulse class and auto-removes after 600ms
+  - When `prefers-reduced-motion` is true, animation durations are 0ms
 
 ### Property-Based Tests
 
-Each property in the Correctness Properties section maps to exactly one fast-check property test. Minimum 100 runs per property.
+Each property in the Correctness Properties section maps to exactly one fast-check property test. Minimum 100 runs per property. Test files:
 
-```
-Feature: snack-didi-ecommerce, Property 1: IDR price formatting
-Feature: snack-didi-ecommerce, Property 2: Cart add — new item creation
-Feature: snack-didi-ecommerce, Property 3: Cart add — deduplication
-Feature: snack-didi-ecommerce, Property 4: Quantity lower bound invariant
-Feature: snack-didi-ecommerce, Property 5: Order summary arithmetic
-Feature: snack-didi-ecommerce, Property 6: Cart persistence round-trip
-Feature: snack-didi-ecommerce, Property 7: Checkout form validation
-Feature: snack-didi-ecommerce, Property 8: Phone number pattern validation
-Feature: snack-didi-ecommerce, Property 9: Checkout confirmation content
-Feature: snack-didi-ecommerce, Property 10: Cart cleared after checkout
-Feature: snack-didi-ecommerce, Property 11: Consignment form validation
-Feature: snack-didi-ecommerce, Property 12: Mute suppresses audio
-```
+| File | Properties covered |
+|---|---|
+| `tests/utils.property.test.js` | Property 1 |
+| `tests/cartmanager.property.test.js` | Properties 2, 3, 4, 5, 6 |
+| `tests/checkoutform.property.test.js` | Properties 7, 9, 10 |
+| `tests/validation.property.test.js` | Property 8 (phone pattern, both forms) |
+| `tests/consignmentform.property.test.js` | Property 11 |
+| `tests/soundengine.property.test.js` | Property 12 |
 
 **Example property test (Property 5):**
 

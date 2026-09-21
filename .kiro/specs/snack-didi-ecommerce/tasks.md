@@ -69,10 +69,12 @@ Incremental implementation of a single-page HTML5 storefront using Tailwind CSS 
     - _Requirements: 3.10_
 
 - [ ] 7. Checkpoint — CartManager
-  - Run `npx vitest --run` and confirm all CartManager property tests pass.
+  - Run `npx vitest --run` and confirm all CartManager property tests pass (Properties 2–6 in `tests/cartmanager.property.test.js` and Property 1 in `tests/utils.property.test.js`).
+  - Verify: zero failing tests, no import errors, no missing `CartManager.fromItems` export.
 
 - [ ] 8. Audio asset placeholders and SoundEngine module
   - [ ] 8.1 Create 5 silent placeholder audio files in `assets/audio/`: `btn-click.mp3`, `spice-select.mp3`, `cart-add.mp3`, `order-confirm.mp3`, `consignment-submit.mp3` — these prevent `fetch()` 404s during development; replace with real audio files before shipping
+    - Generate each file with: `ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 0.1 -q:a 9 -acodec libmp3lame <filename>.mp3` (requires ffmpeg; alternatively create a 0.1s silent WAV and convert, or copy a minimal valid MP3 binary)
     - _Requirements: 7.1, 7.2_
   - [ ] 8.2 Create `src/modules/SoundEngine.js` implementing the `SoundEngine` class with `init()`, `play(clipName)`, `setMuted(muted)`, and `isMuted()` methods
     - Defer `AudioContext` creation to first `pointerdown` or `keydown` user interaction to comply with browser autoplay policies
@@ -124,6 +126,7 @@ Incremental implementation of a single-page HTML5 storefront using Tailwind CSS 
   - [ ] 10.3 Wire spice level selection in `CatalogUI.js`: selecting a level applies visual treatment to the active button, clears it from siblings, and dispatches `snd:spice-select` via EventBus; set `data-snd-handled` on the spice buttons
     - Guard the add-to-cart button: if clicked with no spice level selected, inject `<p role="alert">` adjacent to the spice selector and do not call `CartManager.addItem`
     - On valid add-to-cart click: call `CartManager.addItem`, dispatch `anim:cart-badge-pulse`, and set `data-snd-handled` on the add button
+    - **`data-snd-handled` must be set on both the spice-level buttons and the add-to-cart button** so the delegated click handler in `main.js` (task 18.2) does not double-fire `snd:btn-click` for these elements
     - _Requirements: 2.1, 2.2, 2.4, 3.1, 3.3, 8.4_
 
 - [ ] 11. Cart UI
@@ -132,6 +135,7 @@ Incremental implementation of a single-page HTML5 storefront using Tailwind CSS 
     - Display the `OrderSummary` cart total formatted with `formatIDR`
     - When `items.length === 0`, render the empty-cart state message
     - All buttons minimum 44×44 CSS pixels
+    - **Set `data-snd-handled` on the "+", "−", and "×" buttons** if they dispatch their own `snd:*` events; omit the attribute on buttons that should fall through to the delegated `snd:btn-click` handler in `main.js` (task 18.2)
     - _Requirements: 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 9.4_
   - [ ] 11.2 Implement the cart drawer toggle in `index.html` and `CartRenderer.js`
     - On mobile (<768px): drawer slides in from the right (`translate-x-full` → `translate-x-0`) via a toggle button in the header
@@ -139,12 +143,14 @@ Incremental implementation of a single-page HTML5 storefront using Tailwind CSS 
     - _Requirements: 10.2_
 
 - [ ] 12. Checkpoint — Cart interaction
-  - Open the site in a browser, add a product, verify the cart drawer updates and the badge pulses; confirm `localStorage` key `snackdidi_cart` is populated.
+  - Open the site in a browser (e.g., `npx serve .` or any static file server), select a spice level, and add a product.
+  - Verify: the cart drawer updates with the correct item name, spice level, and price; the cart badge pulses; `localStorage` key `snackdidi_cart` is populated with valid JSON when inspected in DevTools → Application → Local Storage.
 
 - [ ] 13. CheckoutForm module
   - [ ] 13.1 Create `src/modules/CheckoutForm.js` implementing `open(cartSummary)` and `close()` methods
     - `open()`: if `items.length === 0`, show inline error near checkout button and return without opening the overlay
     - Render the checkout overlay (`#checkout-modal`) with name (max 100), phone (max 20, pattern `/^[0-9 +\-()\s]{1,20}$/`), and address (max 300) fields; set `data-snd-handled` on the submit button
+    - **`data-snd-handled` on the submit button is required** so the delegated `snd:btn-click` handler in `main.js` (task 18.2) does not fire a generic click sound when the specific `snd:order-confirm` event is already dispatched on successful submission
     - Validate on submit; inject `<p role="alert">` error messages adjacent to each failing field
     - On success: render confirmation into `#order-confirmation` (includes customer name, item list with quantities, total, personal delivery statement), dispatch `snd:order-confirm`, call `CartManager.clearCart()`, close overlay
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8_
@@ -172,6 +178,7 @@ Incremental implementation of a single-page HTML5 storefront using Tailwind CSS 
 - [ ] 14. ConsignmentForm module
   - [ ] 14.1 Create `src/modules/ConsignmentForm.js` managing the consignment section form in `#consignment`
     - Fields: owner name (required, max 100), store name (required, max 150), phone (required, max 20, same pattern as checkout), city (required, max 100); set `data-snd-handled` on the submit button
+    - **`data-snd-handled` on the submit button is required** so the delegated `snd:btn-click` handler in `main.js` (task 18.2) does not fire a generic click sound when the specific `snd:consignment-submit` event is already dispatched on successful submission
     - Validate on submit; inject `<p role="alert">` error messages adjacent to each failing field; do not submit on error
     - On success: show inline confirmation message (form is NOT cleared), dispatch `snd:consignment-submit`
     - _Requirements: 6.3, 6.4, 6.5, 6.6, 6.7_
@@ -182,7 +189,9 @@ Incremental implementation of a single-page HTML5 storefront using Tailwind CSS 
     - _Requirements: 6.4_
 
 - [ ] 15. Checkpoint — Form submissions
-  - Open the site in a browser; submit the checkout form with a blank field and confirm a per-field error appears; submit a valid checkout and confirm the cart clears and confirmation shows the customer's name and order total.
+  - Open the site in a browser; submit the checkout form with one field blank and confirm a `<p role="alert">` error appears adjacent to that field.
+  - Submit a valid checkout (name, phone, address, non-empty cart) and confirm: the cart clears to zero items, the cart total shows `Rp 0`, and the confirmation message contains the customer's name, item list with quantities, and order total.
+  - Submit the consignment form with one field blank and confirm a per-field `<p role="alert">` error appears; submit a valid consignment form and confirm the inline confirmation message appears without clearing the form.
 
 - [ ] 16. Responsive layout polish
   - [ ] 16.1 Implement responsive product grid in `#catalog` using Tailwind responsive prefixes: `grid-cols-1` below 640px, `sm:grid-cols-2` at 640px–1023px, `lg:grid-cols-3` at ≥1024px
@@ -217,10 +226,26 @@ Incremental implementation of a single-page HTML5 storefront using Tailwind CSS 
     - _Requirements: 1.3, 2.1, 3.9, 7.4, 10.4_
 
 - [ ] 20. Checkpoint — Full-page browser smoke-test
-  - Open the site at 320px and 1024px viewports; confirm all modules initialise without console errors, the mute toggle silences audio, and no horizontal scrollbar appears at any tested width.
+  - Open the site at 320px viewport width (DevTools device emulation) and at 1024px; confirm all modules initialise without console errors (check DevTools Console for any uncaught exceptions or failed `fetch()` calls).
+  - Verify: mute toggle silences audio (no `BufferSourceNode.start()` calls while muted), no horizontal scrollbar appears at 320px or 1024px, product grid shows 1 column at 320px and 3 columns at 1024px, hamburger menu is visible at 320px and absent at 1024px.
 
 - [ ] 21. Final checkpoint — All tests pass
-  - Run `npx vitest --run` and confirm all property-based and unit tests pass. Ask the user if any questions arise.
+  - Run `npx vitest --run` and confirm **all 12 property tests and all unit tests pass** with zero failures before marking this task complete.
+  - Property tests that must pass:
+    - Property 1: IDR Price Formatting (`tests/utils.property.test.js`)
+    - Property 2: Cart Add — New Item Creation (`tests/cartmanager.property.test.js`)
+    - Property 3: Cart Add — Deduplication (`tests/cartmanager.property.test.js`)
+    - Property 4: Quantity Lower Bound Invariant (`tests/cartmanager.property.test.js`)
+    - Property 5: Order Summary Arithmetic (`tests/cartmanager.property.test.js`)
+    - Property 6: Cart Persistence Round-Trip (`tests/cartmanager.property.test.js`)
+    - Property 7: Checkout Form Validation — Required Field Coverage (`tests/checkoutform.property.test.js`)
+    - Property 8: Phone Number Pattern Validation (`tests/validation.property.test.js`)
+    - Property 9: Checkout Confirmation Content Completeness (`tests/checkoutform.property.test.js`)
+    - Property 10: Cart Cleared After Checkout (`tests/checkoutform.property.test.js`)
+    - Property 11: Consignment Form Validation — Required Field Coverage (`tests/consignmentform.property.test.js`)
+    - Property 12: Mute Suppresses All Audio (`tests/soundengine.property.test.js`)
+  - Unit tests that must pass: `tests/soundengine.unit.test.js`, `tests/animationengine.unit.test.js`, `tests/dom.unit.test.js`
+  - Ask the user if any questions arise.
 
 ---
 
